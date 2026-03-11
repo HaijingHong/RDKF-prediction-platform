@@ -1,4 +1,4 @@
-##------------------Subgroup analysis: Age, Gender, Urban/rural residence, Hypertension, Lipid-lowering drugs------------------
+##------------------Subgroup analysis: Age, Gender, Urban/rural residence, Hypertension, Lipid-lowering drugs, Baseline eGFR------------------
 #Split by Age
 Age_list <- split(test_standardized, test_standardized$Age)
 
@@ -13,6 +13,26 @@ Hypertension_list <- split(test_standardized, test_standardized$Hypertension)
 
 #Split by Lipid_lowering_drugs
 lld_list <- split(test_standardized, test_standardized$Lipid_lowering_drugs)
+
+## Split by baseline eGFR
+# Baseline eGFR grouping
+rckd3_1$eGFR_group <- cut(
+  rckd3$eGFR_w1,
+  breaks = c(-Inf, 90, Inf),
+  labels = c("<90", "â‰¥90"),
+  right = FALSE
+)
+
+# Define dataset row numbers as the variable row_id
+rckd3_1$row_id <- rownames(rckd3_1)
+test_standardized_1 <- test_standardized
+test_standardized_1$row_id <- rownames(test_standardized_1)
+
+# Merge the eGFR_group variable into the dataset test_standardized_1
+test_standardized_1 <- test_standardized_1 %>%
+  left_join(rckd3 %>% select(row_id, eGFR_group), by = "row_id")
+
+eGFR_list <- split(test_standardized_1, test_standardized_1$eGFR_group)
 
 #Function to compute performance for any classification task
 evaluate_task_metrics <- function(data, dataset_name = "dataset_name") {
@@ -103,7 +123,7 @@ evaluate_task_metrics <- function(data, dataset_name = "dataset_name") {
 #Performance for each subgroup
 Age1_metrics <- evaluate_task_metrics(Age_list[["1"]], dataset_name = "Age (45-54 years)")
 Age2_metrics <- evaluate_task_metrics(Age_list[["2"]], dataset_name = "Age (55-64 years)")
-Age3_metrics <- evaluate_task_metrics(Age_list[["3"]], dataset_name = "Age (¡Ý 65 years)")
+Age3_metrics <- evaluate_task_metrics(Age_list[["3"]], dataset_name = "Age (Â¡Ã 65 years)")
 Gender1_metrics <- evaluate_task_metrics(Gender_list[["1"]], dataset_name = "Gender (Man)")
 Gender2_metrics <- evaluate_task_metrics(Gender_list[["2"]], dataset_name = "Gender (Woman)")
 crl1_metrics <- evaluate_task_metrics(crl_list[["1"]], dataset_name = "Current residence location (Urban)")
@@ -112,12 +132,14 @@ Hypertension1_metrics <- evaluate_task_metrics(Hypertension_list[["1"]], dataset
 Hypertension2_metrics <- evaluate_task_metrics(Hypertension_list[["2"]], dataset_name = "Hypertension (Yes)")
 lld1_metrics <- evaluate_task_metrics(lld_list[["1"]], dataset_name = "Lipid-lowering drugs (No)")
 lld2_metrics <- evaluate_task_metrics(lld_list[["2"]], dataset_name = "Lipid-lowering drugs (Yes)")
+eGFR1_metrics <- evaluate_task_metrics(eGFR_list[["<90"]], dataset_name = "eGFR (<90)")
+eGFR2_metrics <- evaluate_task_metrics(eGFR_list[["â‰¥90"]], dataset_name = "eGFR (â‰¥90)")
 
 #Put all subgroup results into a named list
 subgroup_metrics_list <- list(
   "Age (45-54 years)"                    = Age1_metrics,
   "Age (55-64 years)"                    = Age2_metrics,
-  "Age (¡Ý65 years)"                      = Age3_metrics,
+  "Age (Â¡Ã65 years)"                     = Age3_metrics,
   "Gender (Man)"                         = Gender1_metrics,
   "Gender (Woman)"                       = Gender2_metrics,
   "Current residence location (Urban)"   = crl1_metrics,
@@ -125,7 +147,10 @@ subgroup_metrics_list <- list(
   "Hypertension (No)"                    = Hypertension1_metrics,
   "Hypertension (Yes)"                   = Hypertension2_metrics,
   "Lipid-lowering drugs (No)"            = lld1_metrics,
-  "Lipid-lowering drugs (Yes)"           = lld2_metrics
+  "Lipid-lowering drugs (Yes)"           = lld2_metrics,
+  "eGFR (<90)" = eGFR1_metrics,
+  "eGFR (â‰¥90)" = eGFR2_metrics
+
 )
 
 #Transpose function
@@ -211,9 +236,9 @@ subgroup_shap <- function(data) {
 }
 
 #Call function to plot SHAP for each subgroup
-Age1_shap <- subgroup_shap(Age_list[["1"]])  # 45¨C54 years
-Age2_shap <- subgroup_shap(Age_list[["2"]])  # 55¨C64 years
-Age3_shap <- subgroup_shap(Age_list[["3"]])  # ¡Ý65 years
+Age1_shap <- subgroup_shap(Age_list[["1"]])  # 45Â¨C54 years
+Age2_shap <- subgroup_shap(Age_list[["2"]])  # 55Â¨C64 years
+Age3_shap <- subgroup_shap(Age_list[["3"]])  # Â¡Ã65 years
 Gender1_shap <- subgroup_shap(Gender_list[["1"]])  # Man
 Gender2_shap <- subgroup_shap(Gender_list[["2"]])  # Woman
 crl1_shap <- subgroup_shap(crl_list[["1"]])  # Urban
@@ -222,6 +247,8 @@ Hypertension1_shap <- subgroup_shap(Hypertension_list[["1"]])  # Hypertension = 
 Hypertension2_shap <- subgroup_shap(Hypertension_list[["2"]])  # Hypertension = Yes
 lld1_shap <- subgroup_shap(lld_list[["1"]])  # Lipid-lowering drugs = No
 lld2_shap <- subgroup_shap(lld_list[["2"]])  # Lipid-lowering drugs = Yes
+eGFR1_shap <- subgroup_shap(eGFR_list[["<90"]])  # eGFR<90
+eGFR2_shap <- subgroup_shap(eGFR_list[["â‰¥90"]])  # eGFRâ‰¥90
 
 ##Summary plot--age
 Age1_shap_beeswarm <- sv_importance(Age1_shap[["sv_svm"]], 
@@ -296,6 +323,55 @@ Age3_shap_beeswarm <- sv_importance(Age3_shap[["sv_svm"]],
     axis.ticks.y = element_blank() #remove y-axis ticks
   )
 
+# Summary plot -- eGFR
+eGFR1_shap_beeswarm <- sv_importance(eGFR1_shap[["sv_svm"]], 
+                                     kind = "beeswarm", # Beeswarm plot
+                                     size = 0.5, # Point size (beeswarm plot)
+                                     bee_width = 0.5, # Horizontal spread width of points
+                                     max_display = Inf) + # Display all features
+  scale_color_gradient(low = "#6601F7", high = "#48EDFE") + 
+  scale_x_continuous(limits = c(-0.45, 0.6), # Set x-axis limits
+                     breaks = seq(-0.4, 0.6, by = 0.2)) + # Define x-axis breaks
+  theme(
+    panel.background = element_rect(fill = "white"), # Panel background set to white
+    plot.background = element_rect(fill = "white"), # Overall plot background set to white
+    axis.title = element_text(size = 40), # Axis title font size
+    axis.text = element_text(size = 30), # Axis tick label font size
+    legend.title = element_text(size = 30), # Legend title font size
+    legend.text = element_text(size = 25), # Legend text font size
+    legend.key.height = unit(1.28, "cm"), # Legend bar height
+    legend.key.width = unit(0.075, "cm"), # Legend bar width
+    plot.tag = element_text(size = 50, face = "bold"), # Tag text size
+    plot.margin = margin(0, 0, 0, 0, "cm"), # Adjust plot margins
+    axis.ticks = element_line(size = 0.25), # Axis tick line width
+    axis.ticks.length = unit(0.05, "cm"), # Tick length (outside)
+    axis.ticks.y = element_blank() # Remove y-axis tick marks
+  )
+
+eGFR2_shap_beeswarm <- sv_importance(eGFR2_shap[["sv_svm"]], 
+                                     kind = "beeswarm", # Beeswarm plot
+                                     size = 0.5, # Point size (beeswarm plot)
+                                     bee_width = 0.5, # Horizontal spread width of points
+                                     max_display = Inf) + # Display all features
+  scale_color_gradient(low = "#6601F7", high = "#48EDFE") + 
+  scale_x_continuous(limits = c(-0.45, 0.6), # Set x-axis limits
+                     breaks = seq(-0.4, 0.6, by = 0.2)) + # Define x-axis breaks
+  theme(
+    panel.background = element_rect(fill = "white"), # Panel background set to white
+    plot.background = element_rect(fill = "white"), # Overall plot background set to white
+    axis.title = element_text(size = 40), # Axis title font size
+    axis.text = element_text(size = 30), # Axis tick label font size
+    legend.title = element_text(size = 30), # Legend title font size
+    legend.text = element_text(size = 25), # Legend text font size
+    legend.key.height = unit(1.28, "cm"), # Legend bar height
+    legend.key.width = unit(0.075, "cm"), # Legend bar width
+    plot.tag = element_text(size = 50, face = "bold"), # Tag text size
+    plot.margin = margin(0, 0, 0, 0, "cm"), # Adjust plot margins
+    axis.ticks = element_line(size = 0.25), # Axis tick line width
+    axis.ticks.length = unit(0.05, "cm"), # Tick length (outside)
+    axis.ticks.y = element_blank() # Remove y-axis tick marks
+  )
+
 #Merge summary plot--age
 shap_plot_Age <- Age1_shap_beeswarm + Age2_shap_beeswarm + Age3_shap_beeswarm + 
   plot_annotation(tag_levels = "A") #Automatically add A-C labels
@@ -351,6 +427,18 @@ shap_plot_lld <- lld1_shap[["shap_beeswarm"]] + lld2_shap[["shap_beeswarm"]] +
 #Export summary plot--Lipid-lowering drugs
 ggsave(plot = shap_plot_lld, 
        filename = "shap_plot_lld.png", 
+       width = 17, 
+       height = 8,
+       units = "cm", 
+       dpi = 600)
+
+#Merge summary plot--eGFR 
+shap_plot_eGFR <- eGFR1_shap_beeswarm + eGFR2_shap_beeswarm + 
+  plot_annotation(tag_levels = "A") #Automatically add A and B labels
+
+#Export summary plot--eGFR
+ggsave(plot = shap_plot_eGFR, 
+       filename = "shap_plot_eGFR.png", 
        width = 17, 
        height = 8,
        units = "cm", 
