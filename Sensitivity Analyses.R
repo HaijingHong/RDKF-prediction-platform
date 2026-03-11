@@ -550,3 +550,394 @@ colnames(test_metrics_youden_t) <- c("Metric", test_metrics_youden_t[1, -1])
 test_metrics_youden_t <- test_metrics_youden_t[-1, ]
 #Combine results (Table S9)
 train_test_metrics_youden <- rbind(train_metrics_youden_t, test_metrics_youden_t)
+
+#---------(6) Sensitivity analysis: SMOTENC
+## Handle class imbalance in the dataset train_boruta using SMOTENC
+# Define preprocessing recipe
+rec <- recipe(RDKF ~ ., data = train_boruta)
+
+# Set random seed to ensure reproducibility of SMOTENC results
+set.seed(131)
+
+# Apply SMOTENC to address class imbalance
+train_smotenc <- rec %>% 
+  step_smotenc(RDKF, over_ratio = 1) %>% # Balance classes to a 1:1 ratio
+  prep() %>% # Apply the recipe to the training data and complete the augmented preprocessing steps
+  bake(new_data = NULL) # Output the processed dataset
+
+train_smotenc_task <- as_task_classif(train_smotenc, target = "RDKF")
+
+## Logistic regression (LR)
+# Select algorithm with probability prediction output
+lr_learner_smotenc <- lrn("classif.log_reg", predict_type = "prob")
+
+# Train the model on the training dataset
+lr_learner_smotenc$train(train_smotenc_task)
+
+# Predict on the training dataset
+train_lr_pred_smotenc <- lr_learner_smotenc$predict(train_smotenc_task)
+
+# Predict on the testing dataset
+test_lr_pred_smotenc <- lr_learner_smotenc$predict(test_task)
+
+## Random forest (RF)
+# Select algorithm with probability prediction output
+rf_learner_smotenc <- lrn("classif.ranger", predict_type = "prob")   
+
+# Define tuned hyperparameters and their ranges
+rf_learner_smotenc$param_set$values <- list(
+  num.trees = to_tune(10, 100), # Number of trees: controls the number of trees in the forest, affecting stability and computation
+  max.depth = to_tune(1, 5), # Maximum tree depth: limits tree depth to prevent overfitting
+  min.node.size = to_tune(p_int(1, 5)), # Minimum samples per internal node: controls the splitting of trees
+  mtry = to_tune(1, 5), # Number of random features at each split: balances diversity and accuracy
+  sample.fraction = to_tune(0.3, 1) # Fraction of samples randomly selected
+)
+
+# Set random seed to ensure reproducibility of tuning
+set.seed(123)
+
+# Perform hyperparameter tuning
+rf_smotenc <- tune(
+  tuner = tnr("grid_search", resolution = 5), # Grid search; resolution = 5 divides each parameter range into 5 values
+  task = train_smotenc_task, # Specify tuning task
+  learner = rf_learner_smotenc, # Specify learner
+  resampling = rsmp("cv", folds = 5), # 5-fold cross-validation
+  measure = msr("classif.auc") # Model evaluation metric: AUC
+)
+
+# Apply the best hyperparameters to the model
+rf_learner_smotenc$param_set$values <- rf_smotenc$result_learner_param_vals
+
+# Train the model on the training dataset
+rf_learner_smotenc$train(train_smotenc_task)
+
+# Predict on the training dataset
+train_rf_pred_smotenc <- rf_learner_smotenc$predict(train_smotenc_task)
+
+# Predict on the testing dataset
+test_rf_pred_smotenc <- rf_learner_smotenc$predict(test_task)
+
+## Support vector machine (SVM)
+svm_learner_smotenc <- lrn("classif.svm", predict_type = "prob")
+
+svm_learner_smotenc$param_set$values <- list(
+  type = "C-classification", # Classification task
+  kernel = "radial", # Radial Basis Function (RBF) kernel for nonlinear classification
+  cost = to_tune(0.001, 1), # Penalty parameter C: controls the penalty for misclassification
+  gamma = to_tune(0.001, 1) # Gamma parameter: defines the width of the RBF kernel
+)
+
+set.seed(123)
+
+svm_smotenc <- tune(
+  tuner = tnr("grid_search", resolution = 5), 
+  task = train_smotenc_task, 
+  learner = svm_learner_smotenc, 
+  resampling = rsmp("cv", folds = 5),
+  measure = msr("classif.auc")
+)
+
+svm_learner_smotenc$param_set$values <- svm_smotenc$result_learner_param_vals
+
+svm_learner_smotenc$train(train_smotenc_task)
+
+train_svm_pred_smotenc <- svm_learner_smotenc$predict(train_smotenc_task)
+test_svm_pred_smotenc <- svm_learner_smotenc$predict(test_task)
+
+## XGBoost
+xgb_learner_smotenc <- lrn("classif.xgboost", predict_type = "prob")
+
+xgb_learner_smotenc$param_set$values <- list(
+  nrounds = to_tune(500, 1000), # Number of trees: controls the number of boosting iterations
+  max_depth = to_tune(1, 10), # Maximum tree depth: controls model complexity
+  eta = to_tune(0.001, 0.05), # Learning rate: controls learning speed and convergence stability
+  min_child_weight = to_tune(1, 10), # Minimum instance weight per leaf node
+  subsample = to_tune(0.1, 0.5) # Subsample ratio: introduces randomness and reduces overfitting
+)
+
+set.seed(123)
+
+xgb_smotenc <- tune(
+  tuner = tnr("grid_search", resolution = 5),
+  task = train_smotenc_task,
+  learner = xgb_learner_smotenc,
+  resampling = rsmp("cv", folds = 5),
+  measure = msr("classif.auc")
+)
+
+xgb_learner_smotenc$param_set$values <- xgb_smotenc$result_learner_param_vals
+
+xgb_learner_smotenc$train(train_smotenc_task)
+
+train_xgb_pred_smotenc <- xgb_learner_smotenc$predict(train_smotenc_task)
+test_xgb_pred_smotenc <- xgb_learner_smotenc$predict(test_task)
+
+test_svm_pred_smotenc$score(msr("classif.auc"))
+
+## CatBoost
+catb_learner_smotenc <- lrn("classif.catboost", predict_type = "prob")
+
+catb_learner_smotenc$param_set$values <- list(
+  learning_rate = to_tune(0.1, 0.5), # Learning rate for gradient steps
+  depth = to_tune(1, 5), # Tree depth
+  rsm = to_tune(0.001, 0.01), # Feature subsampling ratio for each split
+  loss_function_twoclass = "Logloss" # Loss function for binary classification
+)
+
+set.seed(123)
+
+catb_smotenc <- tune(
+  tuner = tnr("grid_search", resolution = 5),
+  task = train_smotenc_task,
+  learner = catb_learner_smotenc,
+  resampling = rsmp("cv", folds = 5),
+  measure = msr("classif.auc")
+)
+
+catb_learner_smotenc$param_set$values <- catb_smotenc$result_learner_param_vals
+
+catb_learner_smotenc$train(train_smotenc_task)
+
+train_catb_pred_smotenc <- catb_learner_smotenc$predict(train_smotenc_task)
+test_catb_pred_smotenc <- catb_learner_smotenc$predict(test_task)
+
+## LightGBM
+lightgbm_learner_smotenc <- lrn("classif.lightgbm", predict_type = "prob")
+
+lightgbm_learner_smotenc$param_set$values <- list(
+  learning_rate = to_tune(0.001, 0.2), # Learning rate
+  bagging_fraction = to_tune(0.8, 1), # Sample fraction
+  max_depth = to_tune(1, 5), # Maximum tree depth
+  num_iterations = to_tune(500, 1000), # Number of iterations
+  objective = "binary" # Objective function for binary classification
+)
+
+set.seed(123)
+
+lightgbm_smotenc <- tune(
+  tuner = tnr("grid_search", resolution = 5), 
+  task = train_smotenc_task, 
+  learner = lightgbm_learner_smotenc, 
+  resampling = rsmp("cv", folds = 5),
+  measure = msr("classif.auc")
+)
+
+lightgbm_learner_smotenc$param_set$values <- lightgbm_smotenc$result_learner_param_vals
+
+lightgbm_learner_smotenc$train(train_smotenc_task)
+
+train_lightgbm_pred_smotenc <- lightgbm_learner_smotenc$predict(train_smotenc_task)
+test_lightgbm_pred_smotenc <- lightgbm_learner_smotenc$predict(test_task)
+
+## -------- Model performance evaluation --------
+# Create lists of prediction results for the training and testing datasets
+train_preds_smotenc <- list(
+  LR = train_lr_pred_smotenc, 
+  RF = train_rf_pred_smotenc, 
+  SVM = train_svm_pred_smotenc, 
+  XGBoost = train_xgb_pred_smotenc, 
+  CatBoost = train_catb_pred_smotenc, 
+  LightGBM = train_lightgbm_pred_smotenc
+)
+test_preds_smotenc <- list(
+  LR = test_lr_pred_smotenc, 
+  RF = test_rf_pred_smotenc, 
+  SVM = test_svm_pred_smotenc, 
+  XGBoost = test_xgb_pred_smotenc, 
+  CatBoost = test_catb_pred_smotenc, 
+  LightGBM = test_lightgbm_pred_smotenc
+)
+
+# Create empty data frames to store performance evaluation results for the training and testing datasets
+train_metrics_smotenc <- data.frame()
+test_metrics_smotenc <- data.frame()
+
+# Calculate performance metrics for the training dataset
+for (model_name in names(train_preds_smotenc)) {
+  
+  # Obtain prediction results from the training dataset
+  pred_train <- train_preds_smotenc[[model_name]]
+  
+  # Obtain predicted probabilities from the training dataset
+  pred_prob_train <- pred_train$prob[, "2"]
+  
+  # Obtain true class labels for the training dataset
+  true_class_train <- pred_train$truth
+  true_class_train <- ifelse(true_class_train == "2", 1, 0)
+  
+  roc_train <- roc(true_class_train, pred_prob_train)
+  auc_train <- roc_train$auc
+  ci_train <- ci(roc_train)
+  
+  # Combine AUC and 95% CI, retaining three decimal places
+  auc_with_ci_train <- sprintf("%.3f\n(%.3f-%.3f)", auc_train, ci_train[1], ci_train[3]) 
+  
+  ## Define performance metrics
+  calculate_metrics <- function(pred_prob, true_class, threshold) {
+    
+    # Generate predicted class based on the threshold
+    pred_class <- ifelse(pred_prob >= threshold, "1", "0") 
+    
+    # Construct confusion matrix ensuring both classes exist
+    cm <- table(
+      factor(pred_class, levels = c("0", "1")), # Ensure predicted classes include both categories
+      factor(true_class, levels = c("0", "1")) # Ensure true classes include both categories
+    )
+    
+    # Extract confusion matrix elements
+    TP <- cm["1", "1"] # True positive
+    TN <- cm["0", "0"] # True negative
+    FP <- cm["1", "0"] # False positive
+    FN <- cm["0", "1"] # False negative
+    
+    # Calculate performance metrics
+    sensitivity <- TP / (TP + FN) # Sensitivity (Recall)
+    specificity <- TN / (TN + FP) # Specificity
+    PPV <- TP / (TP + FP) # Positive predictive value (Precision)
+    NPV <- TN / (TN + FN) # Negative predictive value
+    CCR <- (TP + TN) / sum(cm) # Overall accuracy
+    f1_score <- 2 * (PPV * sensitivity) / (PPV + sensitivity) # F1 score
+    
+    # Return results
+    list(Sensitivity = sensitivity, Specificity = specificity, PPV = PPV, NPV = NPV, CCR = CCR, F1_score = f1_score)
+  }
+  
+  ## Calculate the optimal threshold for the training dataset
+  # Define threshold range
+  threshold <- seq(0, 1, by = 0.001)
+  
+  # Calculate performance metrics across thresholds
+  metrics_list_train <- sapply(threshold, function(t) {
+    calculate_metrics(pred_prob_train, true_class_train, t)
+  }, simplify = F)
+  
+  distances <- sapply(metrics_list_train, function(metrics) {
+    sqrt((1-metrics$Sensitivity)^2 + (1-metrics$Specificity)^2)
+  })
+  
+  # Identify the optimal threshold for the training dataset
+  best_threshold_train <- threshold[which.min(distances)]
+  
+  # Calculate performance metrics using the optimal threshold
+  best_metrics_train <- calculate_metrics(pred_prob_train, true_class_train, best_threshold_train)
+  
+  # Calculate Brier score
+  brier_score_train <- mean((pred_prob_train - true_class_train)^2)
+  
+  # Bootstrap CI
+  set.seed(123)
+  ci_train_metrics <- bootstrap_ci(pred_prob_train, true_class_train, best_threshold_train, B = 1000)
+  
+  Sensitivity_CI  <- format_ci(best_metrics_train$Sensitivity,  ci_train_metrics[, "Sensitivity"])
+  Specificity_CI  <- format_ci(best_metrics_train$Specificity,  ci_train_metrics[, "Specificity"])
+  PPV_CI          <- format_ci(best_metrics_train$PPV,          ci_train_metrics[, "PPV"])
+  NPV_CI          <- format_ci(best_metrics_train$NPV,          ci_train_metrics[, "NPV"])
+  CCR_CI          <- format_ci(best_metrics_train$CCR,          ci_train_metrics[, "CCR"])
+  F1_score_CI     <- format_ci(best_metrics_train$F1_score,     ci_train_metrics[, "F1_score"])
+  Brier_score_CI  <- format_ci(brier_score_train,               ci_train_metrics[, "Brier_score"])
+  
+  # Summarize training dataset model results
+  train_metrics_result <- data.frame(
+    Model = model_name,
+    Dataset = "Training cohort",
+    AUC_CI = auc_with_ci_train, 
+    Threshold = round(best_threshold_train, 3),
+    Sensitivity_CI = Sensitivity_CI,
+    Specificity_CI = Specificity_CI,
+    PPV_CI = PPV_CI,
+    NPV_CI = NPV_CI,
+    CCR_CI = CCR_CI,
+    F1_score_CI = F1_score_CI,
+    Brier_score_CI = Brier_score_CI
+  )
+  
+  # Append training results to the data frame
+  train_metrics_smotenc <- rbind(train_metrics_smotenc, train_metrics_result)
+}
+
+# Calculate performance metrics for the testing dataset
+for (model_name in names(test_preds_smotenc)) {
+  
+  # Obtain prediction results from the testing dataset
+  pred_test <- test_preds_smotenc[[model_name]]
+  
+  # Obtain predicted probabilities from the testing dataset
+  pred_prob_test <- pred_test$prob[, "2"]
+  
+  # Obtain true class labels for the testing dataset
+  true_class_test <- pred_test$truth
+  true_class_test <- ifelse(true_class_test == "2", 1, 0)
+  
+  # Calculate AUC and 95% CI for the testing dataset
+  roc_test <- roc(true_class_test, pred_prob_test)
+  auc_test <- roc_test$auc
+  ci_test <- ci(roc_test)
+  
+  # Combine AUC and 95% CI, retaining three decimal places
+  auc_with_ci_test <- sprintf("%.3f\n(%.3f-%.3f)", auc_test, ci_test[1], ci_test[3]) 
+  
+  # Retrieve the optimal threshold from the training dataset
+  best_threshold_train <- train_metrics_smotenc[train_metrics_smotenc$Model == model_name, "Threshold"]
+  
+  # Calculate testing performance using the training optimal threshold
+  best_metrics_test <- calculate_metrics(pred_prob_test, true_class_test, best_threshold_train)
+  
+  # Calculate Brier score for the testing dataset
+  brier_score_test <- mean((pred_prob_test - true_class_test)^2)
+  
+  # Bootstrap CI
+  set.seed(123)
+  ci_test_metrics <- bootstrap_ci(pred_prob_test, true_class_test, best_threshold_train, B = 1000)
+  
+  Sensitivity_CI  <- format_ci(best_metrics_test$Sensitivity,  ci_test_metrics[, "Sensitivity"])
+  Specificity_CI  <- format_ci(best_metrics_test$Specificity,  ci_test_metrics[, "Specificity"])
+  PPV_CI          <- format_ci(best_metrics_test$PPV,          ci_test_metrics[, "PPV"])
+  NPV_CI          <- format_ci(best_metrics_test$NPV,          ci_test_metrics[, "NPV"])
+  CCR_CI          <- format_ci(best_metrics_test$CCR,          ci_test_metrics[, "CCR"])
+  F1_score_CI     <- format_ci(best_metrics_test$F1_score,     ci_test_metrics[, "F1_score"])
+  Brier_score_CI  <- format_ci(brier_score_test,               ci_test_metrics[, "Brier_score"])
+  
+  # Summarize testing dataset model results
+  test_metrics_result <- data.frame(
+    Model = model_name,
+    Dataset = "Testing cohort",
+    AUC_CI = auc_with_ci_test, 
+    Threshold = round(best_threshold_train, 3),  # Use the optimal threshold from the training dataset
+    Sensitivity_CI = Sensitivity_CI,
+    Specificity_CI = Specificity_CI,
+    PPV_CI = PPV_CI,
+    NPV_CI = NPV_CI,
+    CCR_CI = CCR_CI,
+    F1_score_CI = F1_score_CI,
+    Brier_score_CI = Brier_score_CI
+  )
+  
+  # Append testing results
+  test_metrics_smotenc <- rbind(test_metrics_smotenc, test_metrics_result)
+}
+
+## Combine training and testing model performance results
+# Transpose training dataset model results
+train_metrics_smotenc_t <- train_metrics_smotenc
+names(train_metrics_smotenc_t)[c(3, 5:11)] <- c("AUC\n(95% CI)", "Sensitivity\n(95% CI)", 
+                                                "Specificity\n(95% CI)", "PPV\n(95% CI)", 
+                                                "NPV\n(95% CI)", "CCR\n(95% CI)", 
+                                                "F1 score\n(95% CI)", "Brier score\n(95% CI)")
+
+train_metrics_smotenc_t <- tibble::rownames_to_column(as.data.frame(t(train_metrics_smotenc_t)))
+colnames(train_metrics_smotenc_t) <- c("Metric", train_metrics_smotenc_t[1, -1])
+train_metrics_smotenc_t <- train_metrics_smotenc_t[-1, ]
+
+# Transpose testing dataset model results
+test_metrics_smotenc_t <- test_metrics_smotenc
+names(test_metrics_smotenc_t)[c(3, 5:11)] <- c("AUC\n(95% CI)", "Sensitivity\n(95% CI)", 
+                                               "Specificity\n(95% CI)", "PPV\n(95% CI)", 
+                                               "NPV\n(95% CI)", "CCR\n(95% CI)", 
+                                               "F1 score\n(95% CI)", "Brier score\n(95% CI)")
+
+test_metrics_smotenc_t <- tibble::rownames_to_column(as.data.frame(t(test_metrics_smotenc_t)))
+colnames(test_metrics_smotenc_t) <- c("Metric", test_metrics_smotenc_t[1, -1])
+test_metrics_smotenc_t <- test_metrics_smotenc_t[-1, ]
+
+# Merge results
+train_test_metrics_smotenc <- rbind(train_metrics_smotenc_t, test_metrics_smotenc_t)
